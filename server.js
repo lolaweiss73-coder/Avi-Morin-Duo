@@ -237,7 +237,7 @@ async function listEvents(runId, limit = 1000) {
 function broadcast(runId, event) {
   const clients = sseClients.get(runId);
   if (!clients) return;
-  const payload = `data: ${JSON.stringify(event)}\\n\\n`;
+  const payload = `data: ${JSON.stringify(event)}\n\n`;
   for (const res of clients) {
     try { res.write(payload); } catch {}
   }
@@ -342,12 +342,12 @@ app.get("/api/runs/:id/events", async (req, res) => {
   res.flushHeaders?.();
 
   const prior = await listEvents(run.id, 5000);
-  for (const ev of prior) res.write(`data: ${JSON.stringify(ev)}\\n\\n`);
+  for (const ev of prior) res.write(`data: ${JSON.stringify(ev)}\n\n`);
 
   const clients = sseClients.get(run.id) || new Set();
   clients.add(res);
   sseClients.set(run.id, clients);
-  const keepAlive = setInterval(() => { try { res.write(": ping\\n\\n"); } catch {} }, 20000);
+  const keepAlive = setInterval(() => { try { res.write(": ping\n\n"); } catch {} }, 20000);
   req.on("close", () => {
     clearInterval(keepAlive);
     clients.delete(res);
@@ -361,8 +361,8 @@ app.get("/api/runs/:id/export.jsonl", async (req, res) => {
   const events = await listEvents(run.id, 100000);
   res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
   res.setHeader("Content-Disposition", `attachment; filename="avi-morin-${run.id}.jsonl"`);
-  res.write(JSON.stringify({ type: "run", run }) + "\\n");
-  for (const event of events) res.write(JSON.stringify({ type: "event", ...event }) + "\\n");
+  res.write(JSON.stringify({ type: "run", run }) + "\n");
+  for (const event of events) res.write(JSON.stringify({ type: "event", ...event }) + "\n");
   res.end();
 });
 
@@ -443,10 +443,10 @@ async function streamOpenAI({ run, speaker, round, messages, eventTypePrefix = "
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      const parts = buffer.split(/\\r?\\n\\r?\\n/);
+      const parts = buffer.split(/\r?\n\r?\n/);
       buffer = parts.pop() || "";
       for (const part of parts) {
-        for (const line of part.split("\\n")) {
+        for (const line of part.split("\n")) {
           if (!line.startsWith("data: ")) continue;
           const raw = line.slice(6).trim();
           if (!raw || raw === "[DONE]") continue;
@@ -480,7 +480,7 @@ async function validateBreakthrough(run, proposer, proposal, round) {
   const messages = [
     { role: "system", content: researchPersona(validator) },
     { role: "system", content: "You are performing a strict breakthrough validation. Do not reward enthusiasm. A breakthrough must be meaningfully novel in this conversation, high-impact if true, plausible, actionable enough to investigate, and survive obvious objections." },
-    { role: "user", content: `The other agent proposed this breakthrough:\\n${proposal}\\n\\nRespond briefly with your reasoning, then end with exactly one line: [[VALIDATION {"valid":true,"reason":"short reason"}]] or valid=false.` }
+    { role: "user", content: `The other agent proposed this breakthrough:\n${proposal}\n\nRespond briefly with your reasoning, then end with exactly one line: [[VALIDATION {"valid":true,"reason":"short reason"}]] or valid=false.` }
   ];
   const result = await streamOpenAI({ run, speaker: validator, round, messages, eventTypePrefix: "validation" });
   const m = result.text.match(/\\[\\[VALIDATION\\s+({.*})\\]\\]\\s*$/s);
@@ -502,7 +502,7 @@ async function maybeSummarize(run, round) {
   if (round === 0 || round % 12 !== 0) return;
   const events = await listEvents(run.id, 100000);
   const finals = events.filter(e => e.phase === "research" && e.eventType === "final").slice(-30);
-  const text = finals.map(e => `${e.speaker}: ${e.textContent}`).join("\\n\\n");
+  const text = finals.map(e => `${e.speaker}: ${e.textContent}`).join("\n\n");
   if (!text) return;
   const messages = [
     { role: "system", content: "Compress the research into a dense working-memory summary. Preserve hypotheses, evidence, disagreements, open questions, rejected paths, and any validated insights. No rhetoric." },
@@ -553,7 +553,7 @@ async function callOpenRouter({ run, speaker, model, messages, round }) {
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\\n");
+      const lines = buffer.split("\n");
       buffer = lines.pop() || "";
       for (const line of lines) {
         if (!line.startsWith("data: ")) continue;
