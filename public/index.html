@@ -11,7 +11,7 @@
     h1{font-size:clamp(28px,6vw,48px);margin:8px 0 4px}.sub{color:#9ca3af;margin:0 0 20px}
     .card{background:#161b22;border:1px solid #30363d;border-radius:18px;padding:16px;margin:14px 0;box-shadow:0 10px 30px rgba(0,0,0,.22)}
     label{display:block;font-size:13px;color:#9ca3af;margin:10px 0 6px}
-    input,textarea,button{font:inherit}input,textarea{width:100%;border:1px solid #374151;background:#0b1220;color:#fff;border-radius:12px;padding:12px}
+    input,textarea,select,button{font:inherit}input,textarea,select{width:100%;border:1px solid #374151;background:#0b1220;color:#fff;border-radius:12px;padding:12px}
     textarea{min-height:105px;resize:vertical}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
     .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
     button,a.btn{border:0;border-radius:12px;padding:11px 16px;font-weight:700;cursor:pointer;text-decoration:none}
@@ -40,8 +40,13 @@
         <input id="pin" type="password" autocomplete="off" placeholder="Only if configured" />
       </div>
     </div>
-    <label>Topic (optional)</label>
-    <textarea id="topic" placeholder="Leave blank to use the default mission: improve human life in every possible way."></textarea>
+    <label>Mode</label>
+    <select id="mode">
+      <option value="breakthrough">Breakthrough hunt — research until a validated breakthrough</option>
+      <option value="fantasy">Horny mode — Avi & Morin fantasy</option>
+    </select>
+    <label id="topicLabel">Topic (optional)</label>
+    <textarea id="topic" placeholder="Leave blank to use the default mission."></textarea>
     <div class="actions">
       <button id="start" class="primary">Start</button>
       <button id="stop" class="danger" disabled>Stop</button>
@@ -54,6 +59,7 @@
     <div class="status">
       <span class="pill" id="runId">No run</span>
       <span class="pill" id="status">idle</span>
+      <span class="pill" id="modeStatus">mode —</span>
       <span class="pill" id="phase">research</span>
       <span class="pill" id="round">round 0</span>
       <span class="pill" id="config">checking config…</span>
@@ -95,7 +101,7 @@ function headers(extra={}) {
 }
 function esc(s){ return String(s ?? "").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
 function speakerClass(s){
-  if (s.includes("Reward")) return "reward";
+  if (s.includes("Reward") || s.includes("Fantasy")) return "reward";
   if (s === "Avi Digital") return "avi";
   if (s === "Morin") return "morin";
   return "system";
@@ -136,6 +142,7 @@ async function loadRun(){
     const r = await api("/api/runs/"+runId);
     $("runId").textContent = r.id;
     $("status").textContent = r.status;
+    $("modeStatus").textContent = "mode "+(r.mode || "breakthrough");
     $("phase").textContent = r.phase;
     $("round").textContent = "round "+r.currentRound;
     $("stop").disabled = !["queued","running","stopping"].includes(r.status);
@@ -164,7 +171,7 @@ $("start").onclick = async () => {
     seen.clear(); $("log").innerHTML="";
     const data = await api("/api/runs",{
       method:"POST",
-      body:JSON.stringify({durationMinutes:Number($("duration").value),topic:$("topic").value.trim()})
+      body:JSON.stringify({durationMinutes:Number($("duration").value),topic:$("topic").value.trim(),mode:$("mode").value})
     });
     runId=data.id;
     localStorage.setItem("aviMorinRunId",runId);
@@ -219,6 +226,17 @@ async function savePromptEditor(){
 $("loadPrompt").onclick=loadPromptEditor;
 $("savePrompt").onclick=savePromptEditor;
 $("promptName").addEventListener("change",loadPromptEditor);
+
+
+function updateModeHelp(){
+  const fantasy=$("mode").value==="fantasy";
+  $("topicLabel").textContent=fantasy?"Fantasy direction (optional)":"Research topic (optional)";
+  $("topic").placeholder=fantasy
+    ?"Optional direction for Avi and Morin's fantasy conversation."
+    :"Leave blank to use the default mission.";
+}
+$("mode").addEventListener("change",updateModeHelp);
+updateModeHelp();
 
 $("refresh").onclick = async () => { await loadConfig(); await loadRun(); await listPrompts(); };
 $("pin").addEventListener("change",()=>{ loadConfig(); loadRun(); listPrompts().then(loadPromptEditor); if(runId)connect(); });
