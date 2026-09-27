@@ -293,6 +293,20 @@ app.post("/api/runs", async (req, res) => {
   }
 });
 
+app.get("/api/smoke", async (_req, res) => {
+  try {
+    if (!process.env.OPENAI_API_KEY) return res.status(503).json({ error: "OPENAI_API_KEY is not configured" });
+    const run = await createRun({
+      topic: "Smoke test: identify one practical low-cost idea to improve shade and heat resilience in cities. Keep each turn concise. Do not declare a breakthrough unless truly warranted.",
+      durationMinutes: 1
+    });
+    res.status(202).json(run);
+    setImmediate(() => runLoop(run.id).catch(err => console.error("smoke runLoop", run.id, err)));
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
 app.get("/api/runs", async (_req, res) => {
   try {
     if (pool) {
