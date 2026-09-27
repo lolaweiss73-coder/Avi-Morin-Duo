@@ -63,6 +63,23 @@
   <section class="card">
     <div id="log"></div>
   </section>
+
+  <section class="card">
+    <details>
+      <summary style="cursor:pointer;font-weight:800">Runtime prompts</summary>
+      <p class="sub" style="margin-top:10px">Edit live prompt text stored on the persistent volume. Saving here does not require a build or deploy.</p>
+      <label>Prompt file</label>
+      <select id="promptName" style="width:100%;border:1px solid #374151;background:#0b1220;color:#fff;border-radius:12px;padding:12px"></select>
+      <label>Prompt text</label>
+      <textarea id="promptText" style="min-height:260px"></textarea>
+      <div class="actions">
+        <button id="loadPrompt" class="secondary">Load prompt</button>
+        <button id="savePrompt" class="primary">Save live</button>
+        <span id="promptStatus" class="pill">not loaded</span>
+      </div>
+    </details>
+  </section>
+
 </main>
 <script>
 const $ = id => document.getElementById(id);
@@ -160,10 +177,54 @@ $("stop").onclick = async () => {
   try{ await api("/api/runs/"+runId+"/stop",{method:"POST",body:"{}"}); await loadRun(); }
   catch(e){ addError(e.message); }
 };
-$("refresh").onclick = async () => { await loadConfig(); await loadRun(); };
+
+async function listPrompts(){
+  try{
+    const data = await api("/api/prompts");
+    const sel = $("promptName");
+    const previous = sel.value;
+    sel.innerHTML = "";
+    for(const p of data.prompts){
+      const opt=document.createElement("option");
+      opt.value=p.name; opt.textContent=p.name; sel.appendChild(opt);
+    }
+    if(previous && [...sel.options].some(o=>o.value===previous)) sel.value=previous;
+    $("promptStatus").textContent = data.promptDir || "ready";
+  }catch(e){
+    $("promptStatus").textContent = "locked";
+  }
+}
+async function loadPromptEditor(){
+  const name=$("promptName").value;
+  if(!name) return;
+  $("promptStatus").textContent="loading…";
+  try{
+    const text=await api("/api/prompts/"+encodeURIComponent(name));
+    $("promptText").value=typeof text==="string"?text:JSON.stringify(text,null,2);
+    $("promptStatus").textContent="loaded";
+  }catch(e){ $("promptStatus").textContent=e.message; }
+}
+async function savePromptEditor(){
+  const name=$("promptName").value;
+  if(!name) return;
+  $("promptStatus").textContent="saving…";
+  try{
+    await api("/api/prompts/"+encodeURIComponent(name),{
+      method:"PUT",
+      body:JSON.stringify({content:$("promptText").value})
+    });
+    $("promptStatus").textContent="saved live ✓";
+  }catch(e){ $("promptStatus").textContent=e.message; }
+}
+$("loadPrompt").onclick=loadPromptEditor;
+$("savePrompt").onclick=savePromptEditor;
+$("promptName").addEventListener("change",loadPromptEditor);
+
+$("refresh").onclick = async () => { await loadConfig(); await loadRun(); await listPrompts(); };
 $("pin").addEventListener("change",()=>{ loadConfig(); loadRun(); if(runId)connect(); });
 
 loadConfig();
+listPrompts().then(loadPromptEditor);
 if(runId){loadRun();connect();}
 </script>
 </body>
