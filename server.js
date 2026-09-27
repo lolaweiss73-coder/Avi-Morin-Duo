@@ -438,11 +438,12 @@ async function streamOpenAI({ run, speaker, round, messages, eventTypePrefix = "
     const decoder = new TextDecoder();
     let buffer = "";
     let full = "";
+    let doneText = "";
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
-      const parts = buffer.split("\\n\\n");
+      const parts = buffer.split(/\\r?\\n\\r?\\n/);
       buffer = parts.pop() || "";
       for (const part of parts) {
         for (const line of part.split("\\n")) {
@@ -451,6 +452,12 @@ async function streamOpenAI({ run, speaker, round, messages, eventTypePrefix = "
           if (!raw || raw === "[DONE]") continue;
           let evt;
           try { evt = JSON.parse(raw); } catch { continue; }
+          if (evt.type === "error") {
+            throw new Error(`OpenAI stream error ${evt.code || ""}: ${evt.message || "unknown error"}`);
+          }
+          if (evt.type === "response.output_text.done" && typeof evt.text === "string") {
+            doneText = evt.text;
+          }
           if (evt.type === "response.output_text.delta" && typeof evt.delta === "string") {
             full += evt.delta;
             await addEvent(run.id, {
@@ -461,6 +468,7 @@ async function streamOpenAI({ run, speaker, round, messages, eventTypePrefix = "
         }
       }
     }
+    if (!full && doneText) full = doneText;
     return { text: full.trim(), latencyMs: Date.now() - started };
   } finally {
     clearTimeout(timeout);
