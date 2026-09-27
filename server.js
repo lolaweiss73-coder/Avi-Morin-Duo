@@ -18,6 +18,7 @@ const DEFAULT_MISSION =
 const REWARD_SECONDS = Number(process.env.REWARD_SECONDS || 120);
 const APP_PIN = process.env.APP_PIN || "";
 const DATABASE_URL = process.env.DATABASE_URL || "";
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || process.env.OPEN_ROUTER_API_KEY || "";
 
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public")));
@@ -270,7 +271,7 @@ app.get("/api/config", (_req, res) => {
     rewardModelAvi: OPENROUTER_AVI_MODEL,
     rewardModelMorin: OPENROUTER_MORIN_MODEL,
     hasOpenAI: Boolean(process.env.OPENAI_API_KEY),
-    hasOpenRouter: Boolean(process.env.OPENROUTER_API_KEY),
+    hasOpenRouter: Boolean(OPENROUTER_API_KEY),
     hasDatabase: Boolean(DATABASE_URL),
     pinRequired: Boolean(APP_PIN),
     rewardSeconds: REWARD_SECONDS,
@@ -502,7 +503,7 @@ function rewardPersona(name) {
 }
 
 async function callOpenRouter({ run, speaker, model, messages, round }) {
-  if (!process.env.OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY is not configured");
+  if (!OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY is not configured");
   const started = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60000);
@@ -510,7 +511,7 @@ async function callOpenRouter({ run, speaker, model, messages, round }) {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
         "Content-Type": "application/json",
         "HTTP-Referer": process.env.PUBLIC_URL || "https://railway.app",
         "X-Title": "Avi Morin Duo"
@@ -563,7 +564,7 @@ async function runReward(run, round, breakthrough) {
     textContent: `Reward started for ${REWARD_SECONDS} seconds after validated breakthrough.`
   });
 
-  if (!process.env.OPENROUTER_API_KEY) {
+  if (!OPENROUTER_API_KEY) {
     await addEvent(run.id, { phase: "reward", round, speaker: "system", eventType: "reward_skipped", textContent: "Reward skipped: OPENROUTER_API_KEY is not configured." });
     await updateRun(run.id, { phase: "research" });
     await addEvent(run.id, { phase: "research", round, speaker: "system", eventType: "reward_completed", textContent: "REWARD_COMPLETED — 120 seconds" });
