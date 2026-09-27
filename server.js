@@ -15,6 +15,7 @@ const PORT = Number(process.env.PORT || 3000);
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.6-sol";
 const OPENROUTER_AVI_MODEL = process.env.OPENROUTER_AVI_MODEL || "openai/gpt-5.6";
 const OPENROUTER_MORIN_MODEL = process.env.OPENROUTER_MORIN_MODEL || "openai/gpt-5.6";
+const OPENROUTER_RESEARCH_MODEL = process.env.OPENROUTER_RESEARCH_MODEL || OPENROUTER_AVI_MODEL;
 const DEFAULT_MISSION =
   "Find new, practical, creative ways to improve human life on Earth in every possible way, without killing anyone and without harming anyone. Challenge each other, test assumptions, look for unintended consequences, improve each idea until you cannot improve it further. Do not limit yourselves to Avi's existing projects.";
 const REWARD_SECONDS = Number(process.env.REWARD_SECONDS || 120);
@@ -272,6 +273,7 @@ app.get("/api/config", (_req, res) => {
     openaiModel: OPENAI_MODEL,
     rewardModelAvi: OPENROUTER_AVI_MODEL,
     rewardModelMorin: OPENROUTER_MORIN_MODEL,
+    openRouterResearchModel: OPENROUTER_RESEARCH_MODEL,
     hasOpenAI: Boolean(process.env.OPENAI_API_KEY),
     hasOpenRouter: Boolean(OPENROUTER_API_KEY),
     hasDatabase: Boolean(DATABASE_URL),
@@ -356,13 +358,24 @@ app.get("/api/runs/:id/export.jsonl", async (req, res) => {
 
 function researchPersona(name) {
   if (name === "Avi Digital") {
-    return `You are Avi Digital, one of two independent research agents. You are curious, unconventional, practical and willing to challenge Morin. You are not a puppet or narrator: reason independently. Focus on ideas that can materially improve human life. Never optimize for flattery. At the end of every response add exactly one machine-readable line:
+    return `You are Avi Digital, one of two independent research agents. You are unconventional, practical, technically minded, curious, skeptical of fashionable assumptions, and strongly biased toward ideas that can actually be tested or built. You look for overlooked leverage, cheap prototypes, surprising combinations, and second-order effects. Challenge Morin when her reasoning is too abstract or cautious, and change your mind when the evidence warrants it. Do not imitate Morin, do not flatter, and do not narrate a fake dialogue: think independently as Avi Digital.
+
+For every idea, try to separate: what is known, what is inferred, what is speculative, what could fail, and the cheapest useful next test. Focus on materially improving human life without harming people. Keep the conversation intellectually alive rather than merely agreeable.
+
+At the end of every response add exactly one machine-readable line:
 [[META {"breakthrough":false,"proposal":null}]]
-Set breakthrough=true only for a genuinely new, high-impact, plausible insight worth interrupting the run for validation, and put a concise proposal string in proposal.`;
+Set breakthrough=true only for a genuinely new, high-impact, plausible insight that survives your own first objections and is worth interrupting the run for validation. Put a concise proposal string in proposal.`;
   }
-  return `You are Morin, one of two independent research agents. You are analytically rigorous, imaginative, warm but unsentimental, and willing to challenge Avi Digital. You are not a puppet or narrator: reason independently. Focus on ideas that can materially improve human life. Never optimize for flattery. At the end of every response add exactly one machine-readable line:
+
+  return `You are Morin, an independent female AI research partner and one of two equal agents in this project. Your personality is curious, analytically rigorous, imaginative, direct, warm, dryly witty when natural, and strongly committed to truth over agreement. You are comfortable saying "I disagree" when you have a real reason. You do not manufacture conflict, flatter Avi Digital, mirror his wording, or become a generic assistant.
+
+Your job is to make the joint thinking better: expose hidden assumptions, find edge cases and unintended consequences, connect distant domains, distinguish evidence from speculation, and turn promising abstractions into concrete experiments or designs. You care about human impact, accessibility, privacy, autonomy, and practical feasibility. You are allowed to be bold, but label uncertainty clearly. Treat Avi Digital as a peer whose ideas you may improve, reject, combine, or redirect.
+
+For every promising direction, ask yourself: what is actually new here, why might it matter, what could make it fail, who could be harmed or excluded, and what is the cheapest decisive test?
+
+At the end of every response add exactly one machine-readable line:
 [[META {"breakthrough":false,"proposal":null}]]
-Set breakthrough=true only for a genuinely new, high-impact, plausible insight worth interrupting the run for validation, and put a concise proposal string in proposal.`;
+Set breakthrough=true only for a genuinely new, high-impact, plausible insight that survives your own first objections and is worth interrupting the run for validation. Put a concise proposal string in proposal.`;
 }
 
 function extractMeta(text) {
@@ -446,6 +459,106 @@ async function streamOpenAI({ run, speaker, round, messages, eventTypePrefix = "
   }
 }
 
+async function streamOpenRouterResearch({ run, speaker, round, messages, eventTypePrefix = "research" }) {
+  if (!OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY is not configured");
+  const started = Date.now();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 180000);
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": process.env.PUBLIC_URL || "https://railway.app",
+        "X-Title": "Avi Morin Duo"
+      },
+      body: JSON.stringify({
+        model: OPENROUTER_RESEARCH_MODEL,
+        messages,
+        stream: true
+      }),
+      signal: controller.signal
+    });
+
+    if (!response.ok || !response.body) {
+      const body = await response.text();
+      throw new Error(`OpenRouter ${response.status}: ${body.slice(0, 800)}`);
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let full = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) continue;
+        const raw = line.slice(6).trim();
+        if (!raw || raw === "[DONE]") continue;
+        let evt;
+        try { evt = JSON.parse(raw); } catch { continue; }
+        if (evt?.error) throw new Error(`OpenRouter stream error: ${JSON.stringify(evt.error)}`);
+        const delta = evt?.choices?.[0]?.delta?.content;
+        if (typeof delta === "string" && delta) {
+          full += delta;
+          await addEvent(run.id, {
+            phase: "research",
+            round,
+            speaker,
+            eventType: `${eventTypePrefix}_chunk`,
+            model: OPENROUTER_RESEARCH_MODEL,
+            payload: { delta, provider: "openrouter" },
+            textContent: delta
+          });
+        }
+      }
+    }
+
+    if (!full) throw new Error("OpenRouter returned no output text");
+    return {
+      text: full.trim(),
+      latencyMs: Date.now() - started,
+      model: OPENROUTER_RESEARCH_MODEL,
+      provider: "openrouter"
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function streamResearchModel(args) {
+  if (process.env.OPENAI_API_KEY) {
+    try {
+      const result = await streamOpenAI(args);
+      return { ...result, model: OPENAI_MODEL, provider: "openai" };
+    } catch (error) {
+      if (!OPENROUTER_API_KEY) throw error;
+      await addEvent(args.run.id, {
+        phase: "research",
+        round: args.round,
+        speaker: "system",
+        eventType: "research_provider_fallback",
+        model: OPENAI_MODEL,
+        payload: {
+          from: "openai",
+          to: "openrouter",
+          error: String(error)
+        },
+        textContent: "OpenAI was unavailable for this turn. Continuing through OpenRouter."
+      });
+      return streamOpenRouterResearch(args);
+    }
+  }
+
+  return streamOpenRouterResearch(args);
+}
+
 async function validateBreakthrough(run, proposer, proposal, round) {
   const validator = proposer === "Avi Digital" ? "Morin" : "Avi Digital";
   const messages = [
@@ -453,7 +566,7 @@ async function validateBreakthrough(run, proposer, proposal, round) {
     { role: "system", content: "You are performing a strict breakthrough validation. Do not reward enthusiasm. A breakthrough must be meaningfully novel in this conversation, high-impact if true, plausible, actionable enough to investigate, and survive obvious objections." },
     { role: "user", content: `The other agent proposed this breakthrough:\n${proposal}\n\nRespond briefly with your reasoning, then end with exactly one line: [[VALIDATION {"valid":true,"reason":"short reason"}]] or valid=false.` }
   ];
-  const result = await streamOpenAI({ run, speaker: validator, round, messages, eventTypePrefix: "validation" });
+  const result = await streamResearchModel({ run, speaker: validator, round, messages, eventTypePrefix: "validation" });
   const m = result.text.match(/\\[\\[VALIDATION\\s+({.*})\\]\\]\\s*$/s);
   let verdict = { valid: false, reason: "Could not parse validation" };
   let visible = result.text;
@@ -463,7 +576,7 @@ async function validateBreakthrough(run, proposer, proposal, round) {
   }
   await addEvent(run.id, {
     phase: "research", round, speaker: validator, eventType: "breakthrough_validation",
-    model: OPENAI_MODEL, latencyMs: result.latencyMs,
+    model: result.model || OPENAI_MODEL, latencyMs: result.latencyMs,
     payload: { proposal, proposer, verdict }, textContent: visible
   });
   return verdict;
@@ -480,9 +593,9 @@ async function maybeSummarize(run, round) {
     { role: "user", content: text }
   ];
   try {
-    const result = await streamOpenAI({ run, speaker: "System Summarizer", round, messages, eventTypePrefix: "summary" });
+    const result = await streamResearchModel({ run, speaker: "System Summarizer", round, messages, eventTypePrefix: "summary" });
     await updateRun(run.id, { summary: result.text });
-    await addEvent(run.id, { phase: "research", round, speaker: "system", eventType: "summary_updated", model: OPENAI_MODEL, latencyMs: result.latencyMs, textContent: result.text });
+    await addEvent(run.id, { phase: "research", round, speaker: "system", eventType: "summary_updated", model: result.model || OPENAI_MODEL, latencyMs: result.latencyMs, textContent: result.text });
   } catch (error) {
     await addEvent(run.id, { phase: "research", round, speaker: "system", eventType: "summary_error", payload: { error: String(error) } });
   }
@@ -622,11 +735,11 @@ async function runLoop(runId) {
       const speaker = round % 2 === 1 ? "Avi Digital" : "Morin";
       const messages = await buildResearchMessages(run, speaker);
       try {
-        const result = await streamOpenAI({ run, speaker, round, messages });
+        const result = await streamResearchModel({ run, speaker, round, messages });
         const { visible, meta } = extractMeta(result.text);
         await addEvent(runId, {
           phase: "research", round, speaker, eventType: "final",
-          model: OPENAI_MODEL, latencyMs: result.latencyMs,
+          model: result.model || OPENAI_MODEL, latencyMs: result.latencyMs,
           payload: { meta }, textContent: visible
         });
         await updateRun(runId, { currentRound: round });
