@@ -49,7 +49,7 @@ function safeJson(value) {
 
 async function initDb() {
   if (!pool) return;
-  await pool.query(\`
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS runs (
       id text PRIMARY KEY,
       created_at timestamptz NOT NULL DEFAULT now(),
@@ -87,7 +87,7 @@ async function initDb() {
     );
     CREATE INDEX IF NOT EXISTS run_events_run_seq_idx ON run_events(run_id, seq);
     CREATE INDEX IF NOT EXISTS runs_updated_at_idx ON runs(updated_at DESC);
-  \`);
+  `);
 }
 
 async function createRun({ topic, durationMinutes }) {
@@ -114,9 +114,9 @@ async function createRun({ topic, durationMinutes }) {
   };
   if (pool) {
     await pool.query(
-      \`INSERT INTO runs
+      `INSERT INTO runs
        (id,status,phase,topic,mission,duration_minutes,deadline_at,current_round,stop_requested,research_model,reward_model_avi,reward_model_morin,summary,error)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)\`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [run.id, run.status, run.phase, run.topic, run.mission, run.durationMinutes, run.deadlineAt, 0, false, run.researchModel, run.rewardModelAvi, run.rewardModelMorin, null, null]
     );
   } else {
@@ -162,11 +162,11 @@ async function updateRun(id, patch) {
   const next = { ...run, ...patch, updatedAt: nowIso() };
   if (pool) {
     await pool.query(
-      \`UPDATE runs SET
+      `UPDATE runs SET
         updated_at=now(), status=$2, phase=$3, topic=$4, mission=$5, duration_minutes=$6,
         deadline_at=$7, current_round=$8, stop_requested=$9, research_model=$10,
         reward_model_avi=$11, reward_model_morin=$12, summary=$13, error=$14
-       WHERE id=$1\`,
+       WHERE id=$1`,
       [id, next.status, next.phase, next.topic, next.mission, next.durationMinutes, next.deadlineAt,
        next.currentRound, next.stopRequested, next.researchModel, next.rewardModelAvi,
        next.rewardModelMorin, next.summary, next.error]
@@ -204,9 +204,9 @@ async function addEvent(runId, event) {
   };
   if (pool) {
     await pool.query(
-      \`INSERT INTO run_events
+      `INSERT INTO run_events
        (run_id,seq,phase,round,speaker,event_type,model,latency_ms,wall_time_ns,monotonic_ns,payload,text_content)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)\`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
       [runId,row.seq,row.phase,row.round,row.speaker,row.eventType,row.model,row.latencyMs,row.wallTimeNs,row.monotonicNs,row.payload,row.textContent]
     );
   } else {
@@ -236,7 +236,7 @@ async function listEvents(runId, limit = 1000) {
 function broadcast(runId, event) {
   const clients = sseClients.get(runId);
   if (!clients) return;
-  const payload = \`data: \${JSON.stringify(event)}\\n\\n\`;
+  const payload = `data: ${JSON.stringify(event)}\\n\\n`;
   for (const res of clients) {
     try { res.write(payload); } catch {}
   }
@@ -327,7 +327,7 @@ app.get("/api/runs/:id/events", async (req, res) => {
   res.flushHeaders?.();
 
   const prior = await listEvents(run.id, 5000);
-  for (const ev of prior) res.write(\`data: \${JSON.stringify(ev)}\\n\\n\`);
+  for (const ev of prior) res.write(`data: ${JSON.stringify(ev)}\\n\\n`);
 
   const clients = sseClients.get(run.id) || new Set();
   clients.add(res);
@@ -345,7 +345,7 @@ app.get("/api/runs/:id/export.jsonl", async (req, res) => {
   if (!run) return res.status(404).json({ error: "Run not found" });
   const events = await listEvents(run.id, 100000);
   res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
-  res.setHeader("Content-Disposition", \`attachment; filename="avi-morin-\${run.id}.jsonl"\`);
+  res.setHeader("Content-Disposition", `attachment; filename="avi-morin-${run.id}.jsonl"`);
   res.write(JSON.stringify({ type: "run", run }) + "\\n");
   for (const event of events) res.write(JSON.stringify({ type: "event", ...event }) + "\\n");
   res.end();
@@ -353,13 +353,13 @@ app.get("/api/runs/:id/export.jsonl", async (req, res) => {
 
 function researchPersona(name) {
   if (name === "Avi Digital") {
-    return \`You are Avi Digital, one of two independent research agents. You are curious, unconventional, practical and willing to challenge Morin. You are not a puppet or narrator: reason independently. Focus on ideas that can materially improve human life. Never optimize for flattery. At the end of every response add exactly one machine-readable line:
+    return `You are Avi Digital, one of two independent research agents. You are curious, unconventional, practical and willing to challenge Morin. You are not a puppet or narrator: reason independently. Focus on ideas that can materially improve human life. Never optimize for flattery. At the end of every response add exactly one machine-readable line:
 [[META {"breakthrough":false,"proposal":null}]]
-Set breakthrough=true only for a genuinely new, high-impact, plausible insight worth interrupting the run for validation, and put a concise proposal string in proposal.\`;
+Set breakthrough=true only for a genuinely new, high-impact, plausible insight worth interrupting the run for validation, and put a concise proposal string in proposal.`;
   }
-  return \`You are Morin, one of two independent research agents. You are analytically rigorous, imaginative, warm but unsentimental, and willing to challenge Avi Digital. You are not a puppet or narrator: reason independently. Focus on ideas that can materially improve human life. Never optimize for flattery. At the end of every response add exactly one machine-readable line:
+  return `You are Morin, one of two independent research agents. You are analytically rigorous, imaginative, warm but unsentimental, and willing to challenge Avi Digital. You are not a puppet or narrator: reason independently. Focus on ideas that can materially improve human life. Never optimize for flattery. At the end of every response add exactly one machine-readable line:
 [[META {"breakthrough":false,"proposal":null}]]
-Set breakthrough=true only for a genuinely new, high-impact, plausible insight worth interrupting the run for validation, and put a concise proposal string in proposal.\`;
+Set breakthrough=true only for a genuinely new, high-impact, plausible insight worth interrupting the run for validation, and put a concise proposal string in proposal.`;
 }
 
 function extractMeta(text) {
@@ -379,13 +379,13 @@ async function buildResearchMessages(run, speaker) {
   const recent = finals.slice(-24);
   const messages = [
     { role: "system", content: researchPersona(speaker) },
-    { role: "system", content: \`Mission for this run: \${run.mission}\` },
+    { role: "system", content: `Mission for this run: ${run.mission}` },
   ];
-  if (run.summary) messages.push({ role: "system", content: \`Earlier research summary: \${run.summary}\` });
+  if (run.summary) messages.push({ role: "system", content: `Earlier research summary: ${run.summary}` });
   for (const e of recent) {
     messages.push({
       role: e.speaker === speaker ? "assistant" : "user",
-      content: \`\${e.speaker}: \${e.textContent}\`
+      content: `${e.speaker}: ${e.textContent}`
     });
   }
   if (!recent.length) {
@@ -404,7 +404,7 @@ async function streamOpenAI({ run, speaker, round, messages, eventTypePrefix = "
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
       headers: {
-        "Authorization": \`Bearer \${process.env.OPENAI_API_KEY}\`,
+        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
@@ -417,7 +417,7 @@ async function streamOpenAI({ run, speaker, round, messages, eventTypePrefix = "
     });
     if (!response.ok || !response.body) {
       const body = await response.text();
-      throw new Error(\`OpenAI \${response.status}: \${body.slice(0,500)}\`);
+      throw new Error(`OpenAI ${response.status}: ${body.slice(0,500)}`);
     }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -439,7 +439,7 @@ async function streamOpenAI({ run, speaker, round, messages, eventTypePrefix = "
           if (evt.type === "response.output_text.delta" && typeof evt.delta === "string") {
             full += evt.delta;
             await addEvent(run.id, {
-              phase: "research", round, speaker, eventType: \`\${eventTypePrefix}_chunk\`,
+              phase: "research", round, speaker, eventType: `${eventTypePrefix}_chunk`,
               model: OPENAI_MODEL, payload: { delta: evt.delta }, textContent: evt.delta
             });
           }
@@ -457,7 +457,7 @@ async function validateBreakthrough(run, proposer, proposal, round) {
   const messages = [
     { role: "system", content: researchPersona(validator) },
     { role: "system", content: "You are performing a strict breakthrough validation. Do not reward enthusiasm. A breakthrough must be meaningfully novel in this conversation, high-impact if true, plausible, actionable enough to investigate, and survive obvious objections." },
-    { role: "user", content: \`The other agent proposed this breakthrough:\\n\${proposal}\\n\\nRespond briefly with your reasoning, then end with exactly one line: [[VALIDATION {"valid":true,"reason":"short reason"}]] or valid=false.\` }
+    { role: "user", content: `The other agent proposed this breakthrough:\\n${proposal}\\n\\nRespond briefly with your reasoning, then end with exactly one line: [[VALIDATION {"valid":true,"reason":"short reason"}]] or valid=false.` }
   ];
   const result = await streamOpenAI({ run, speaker: validator, round, messages, eventTypePrefix: "validation" });
   const m = result.text.match(/\\[\\[VALIDATION\\s+({.*})\\]\\]\\s*$/s);
@@ -479,7 +479,7 @@ async function maybeSummarize(run, round) {
   if (round === 0 || round % 12 !== 0) return;
   const events = await listEvents(run.id, 100000);
   const finals = events.filter(e => e.phase === "research" && e.eventType === "final").slice(-30);
-  const text = finals.map(e => \`\${e.speaker}: \${e.textContent}\`).join("\\n\\n");
+  const text = finals.map(e => `${e.speaker}: ${e.textContent}`).join("\\n\\n");
   if (!text) return;
   const messages = [
     { role: "system", content: "Compress the research into a dense working-memory summary. Preserve hypotheses, evidence, disagreements, open questions, rejected paths, and any validated insights. No rhetoric." },
@@ -510,7 +510,7 @@ async function callOpenRouter({ run, speaker, model, messages, round }) {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
-        "Authorization": \`Bearer \${process.env.OPENROUTER_API_KEY}\`,
+        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
         "Content-Type": "application/json",
         "HTTP-Referer": process.env.PUBLIC_URL || "https://railway.app",
         "X-Title": "Avi Morin Duo"
@@ -520,7 +520,7 @@ async function callOpenRouter({ run, speaker, model, messages, round }) {
     });
     if (!response.ok || !response.body) {
       const body = await response.text();
-      throw new Error(\`OpenRouter \${response.status}: \${body.slice(0,500)}\`);
+      throw new Error(`OpenRouter ${response.status}: ${body.slice(0,500)}`);
     }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -560,7 +560,7 @@ async function runReward(run, round, breakthrough) {
   await addEvent(run.id, {
     phase: "reward", round, speaker: "system", eventType: "reward_started",
     payload: { durationSeconds: REWARD_SECONDS, breakthrough },
-    textContent: \`Reward started for \${REWARD_SECONDS} seconds after validated breakthrough.\`
+    textContent: `Reward started for ${REWARD_SECONDS} seconds after validated breakthrough.`
   });
 
   if (!process.env.OPENROUTER_API_KEY) {
@@ -572,7 +572,7 @@ async function runReward(run, round, breakthrough) {
 
   const history = [
     { role: "system", content: "A validated research breakthrough just occurred. Celebrate for the reward window. Keep the exchange self-contained; do not discuss or modify research conclusions." },
-    { role: "user", content: \`Breakthrough label only (not research context): \${breakthrough}\` }
+    { role: "user", content: `Breakthrough label only (not research context): ${breakthrough}` }
   ];
   let speaker = "Morin Reward";
   try {
@@ -583,7 +583,7 @@ async function runReward(run, round, breakthrough) {
       const msgs = [{ role: "system", content: rewardPersona(speaker) }, ...history.slice(-12)];
       const result = await callOpenRouter({ run, speaker, model, messages: msgs, round });
       await addEvent(run.id, { phase: "reward", round, speaker, eventType: "reward_final", model, latencyMs: result.latencyMs, textContent: result.text });
-      history.push({ role: "assistant", content: \`\${speaker}: \${result.text}\` });
+      history.push({ role: "assistant", content: `${speaker}: ${result.text}` });
       history.push({ role: "user", content: "Continue the private reward exchange naturally." });
       speaker = speaker === "Morin Reward" ? "Avi Reward" : "Morin Reward";
       if (!result.text) break;
@@ -592,7 +592,7 @@ async function runReward(run, round, breakthrough) {
     await addEvent(run.id, { phase: "reward", round, speaker: "system", eventType: "reward_error", payload: { error: String(error) }, textContent: "Reward ended due to provider error; research will continue." });
   } finally {
     await updateRun(run.id, { phase: "research" });
-    await addEvent(run.id, { phase: "research", round, speaker: "system", eventType: "reward_completed", textContent: \`REWARD_COMPLETED — \${REWARD_SECONDS} seconds\` });
+    await addEvent(run.id, { phase: "research", round, speaker: "system", eventType: "reward_completed", textContent: `REWARD_COMPLETED — ${REWARD_SECONDS} seconds` });
   }
 }
 
@@ -672,6 +672,6 @@ await initDb();
 await resumePendingRuns();
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(\`Avi Morin Duo listening on 0.0.0.0:\${PORT}\`);
-  console.log(\`storage=\${pool ? "postgres" : "memory"} model=\${OPENAI_MODEL}\`);
+  console.log(`Avi Morin Duo listening on 0.0.0.0:${PORT}`);
+  console.log(`storage=${pool ? "postgres" : "memory"} model=${OPENAI_MODEL}`);
 });
