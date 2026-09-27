@@ -1,0 +1,4 @@
+The other agent proposed this breakthrough:
+{{proposal}}
+
+Respond briefly with your reasoning, then end with exactly one line: [[VALIDATION {"valid":true,"reason":"short reason"}]] or valid=false.
