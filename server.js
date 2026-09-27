@@ -309,6 +309,22 @@ app.get("/api/runs", async (_req, res) => {
   }
 });
 
+app.get("/api/runs/:id/finals", async (req, res) => {
+  const run = await getRun(req.params.id);
+  if (!run) return res.status(404).json({ error: "Run not found" });
+  const events = await listEvents(run.id, 100000);
+  res.json(events
+    .filter(e => e.phase === "research" && e.eventType === "final")
+    .map(e => ({
+      seq: e.seq,
+      round: e.round,
+      speaker: e.speaker,
+      model: e.model,
+      latencyMs: e.latencyMs,
+      textContent: e.textContent
+    })));
+});
+
 app.get("/api/runs/:id", async (req, res) => {
   const run = await getRun(req.params.id);
   if (!run) return res.status(404).json({ error: "Run not found" });
