@@ -1,6 +1,7 @@
 import express from "express";
 import pg from "pg";
 import crypto from "crypto";
+import OpenAI from "openai";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -8,6 +9,7 @@ import { fileURLToPath } from "url";
 const { Pool } = pg;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const PORT = Number(process.env.PORT || 3000);
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.6-sol";
@@ -416,59 +418,42 @@ async function streamOpenAI({ run, speaker, round, messages, eventTypePrefix = "
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 180000);
   try {
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        model: OPENAI_MODEL,
-        input: messages,
-        reasoning: { effort: "medium" },
-        stream: true
-      }),
-      signal: controller.signal
-    });
-    if (!response.ok || !response.body) {
-      const body = await response.text();
-      throw new Error(`OpenAI ${response.status}: ${body.slice(0,500)}`);
-    }
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
+    const stream = await openai.responses.create({
+      model: OPENAI_MODEL,
+      input: messages,
+      reasoning: { effort: "medium" },
+      stream: true
+    }, { signal: controller.signal });
+
     let full = "";
     let doneText = "";
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const parts = buffer.split(/\r?\n\r?\n/);
-      buffer = parts.pop() || "";
-      for (const part of parts) {
-        for (const line of part.split("\n")) {
-          if (!line.startsWith("data: ")) continue;
-          const raw = line.slice(6).trim();
-          if (!raw || raw === "[DONE]") continue;
-          let evt;
-          try { evt = JSON.parse(raw); } catch { continue; }
-          if (evt.type === "error") {
-            throw new Error(`OpenAI stream error ${evt.code || ""}: ${evt.message || "unknown error"}`);
-          }
-          if (evt.type === "response.output_text.done" && typeof evt.text === "string") {
-            doneText = evt.text;
-          }
-          if (evt.type === "response.output_text.delta" && typeof evt.delta === "string") {
-            full += evt.delta;
-            await addEvent(run.id, {
-              phase: "research", round, speaker, eventType: `${eventTypePrefix}_chunk`,
-              model: OPENAI_MODEL, payload: { delta: evt.delta }, textContent: evt.delta
-            });
-          }
-        }
+    for await (const evt of stream) {
+      if (evt.type === "error") {
+        const detail = evt.error || evt;
+        throw new Error(`OpenAI stream error: ${JSON.stringify(detail)}`);
+      }
+      if (evt.type === "response.failed") {
+        throw new Error(`OpenAI response failed: ${JSON.stringify(evt.response?.error || evt)}`);
+      }
+      if (evt.type === "response.output_text.done" && typeof evt.text === "string") {
+        doneText = evt.text;
+      }
+      if (evt.type === "response.output_text.delta" && typeof evt.delta === "string") {
+        full += evt.delta;
+        await addEvent(run.id, {
+          phase: "research",
+          round,
+          speaker,
+          eventType: `${eventTypePrefix}_chunk`,
+          model: OPENAI_MODEL,
+          payload: { delta: evt.delta, sequenceNumber: evt.sequence_number ?? null },
+          textContent: evt.delta
+        });
       }
     }
+
     if (!full && doneText) full = doneText;
+    if (!full) throw new Error("OpenAI returned no output text");
     return { text: full.trim(), latencyMs: Date.now() - started };
   } finally {
     clearTimeout(timeout);
