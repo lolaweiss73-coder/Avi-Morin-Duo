@@ -16,8 +16,56 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.6-sol";
 const OPENROUTER_AVI_MODEL = process.env.OPENROUTER_AVI_MODEL || "openai/gpt-5.6";
 const OPENROUTER_MORIN_MODEL = process.env.OPENROUTER_MORIN_MODEL || "openai/gpt-5.6";
 const OPENROUTER_RESEARCH_MODEL = process.env.OPENROUTER_RESEARCH_MODEL || OPENROUTER_AVI_MODEL;
-const DEFAULT_MISSION =
-  "Continuously improve existing ideas or discover entirely new ideas, methods, systems, inventions, services, policies, or other practical approaches that could improve the lives of humanity anywhere in the world. You are not restricted to a single domain or to Avi's existing projects. Build forward together: preserve useful parts of the shared idea, extend them, combine them, and make the proposal stronger every turn. Critique only when it helps repair or strengthen the current direction; do not abandon a promising direction for a fixable flaw. Every turn should leave a stronger shared proposal than the previous one. Only pivot when a flaw is truly fatal or a clearly superior direction emerges. Test assumptions and unintended consequences as part of improvement, not as an excuse to reset. Avoid proposals that require killing or harming people.";
+const PROMPT_DIR = process.env.PROMPT_DIR || "/data/prompts";
+const PROMPT_SEED_DIR = path.join(__dirname, "prompts");
+const PROMPT_FILES = new Set([
+  "mission.txt",
+  "avi-digital.txt",
+  "morin.txt",
+  "validation-system.txt",
+  "validation-user.txt",
+  "summarizer.txt",
+  "reward-avi.txt",
+  "reward-morin.txt",
+  "reward-intro.txt",
+  "reward-breakthrough.txt",
+  "reward-continue.txt",
+  "mission-wrapper.txt",
+  "summary-wrapper.txt",
+  "research-first-turn.txt",
+  "research-continue.txt"
+]);
+
+function promptPath(name) {
+  if (!PROMPT_FILES.has(name)) throw new Error("Unknown prompt file");
+  return path.join(PROMPT_DIR, name);
+}
+
+function seedPromptPath(name) {
+  if (!PROMPT_FILES.has(name)) throw new Error("Unknown prompt file");
+  return path.join(PROMPT_SEED_DIR, name);
+}
+
+function initPromptStore() {
+  fs.mkdirSync(PROMPT_DIR, { recursive: true });
+  for (const name of PROMPT_FILES) {
+    const dest = promptPath(name);
+    if (!fs.existsSync(dest)) {
+      fs.copyFileSync(seedPromptPath(name), dest);
+    }
+  }
+}
+
+function loadPrompt(name, vars = {}) {
+  const live = promptPath(name);
+  const source = fs.existsSync(live) ? live : seedPromptPath(name);
+  let text = fs.readFileSync(source, "utf8").trim();
+  for (const [key, value] of Object.entries(vars)) {
+    text = text.split(`{{${key}}}`).join(String(value ?? ""));
+  }
+  return text;
+}
+
 const REWARD_SECONDS = Number(process.env.REWARD_SECONDS || 120);
 const APP_PIN = process.env.APP_PIN || "";
 const DATABASE_URL = process.env.DATABASE_URL || "";
@@ -105,7 +153,7 @@ async function createRun({ topic, durationMinutes }) {
     status: "queued",
     phase: "research",
     topic: topic || null,
-    mission: topic?.trim() || DEFAULT_MISSION,
+    mission: topic?.trim() || loadPrompt("mission.txt"),
     durationMinutes,
     deadlineAt,
     currentRound: 0,
@@ -279,6 +327,8 @@ app.get("/api/config", (_req, res) => {
     hasDatabase: Boolean(DATABASE_URL),
     pinRequired: Boolean(APP_PIN),
     rewardSeconds: REWARD_SECONDS,
+    promptDir: PROMPT_DIR,
+    promptFiles: [...PROMPT_FILES].sort(),
   });
 });
 
@@ -288,10 +338,45 @@ app.post("/api/runs", async (req, res) => {
     if (!Number.isFinite(durationMinutes) || durationMinutes < 1 || durationMinutes > 600) {
       return res.status(400).json({ error: "durationMinutes must be between 1 and 600" });
     }
-    if (!process.env.OPENAI_API_KEY) return res.status(503).json({ error: "OPENAI_API_KEY is not configured" });
+    if (!process.env.OPENAI_API_KEY && !OPENROUTER_API_KEY) return res.status(503).json({ error: "No model provider API key is configured" });
     const run = await createRun({ topic: String(req.body?.topic || "").trim(), durationMinutes });
     res.status(202).json(run);
     setImmediate(() => runLoop(run.id).catch(err => console.error("runLoop", run.id, err)));
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+app.get("/api/prompts", (_req, res) => {
+  try {
+    const prompts = [...PROMPT_FILES].sort().map(name => ({
+      name,
+      content: loadPrompt(name)
+    }));
+    res.json({ promptDir: PROMPT_DIR, prompts });
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
+});
+
+app.get("/api/prompts/:name", (req, res) => {
+  try {
+    const name = String(req.params.name || "");
+    res.type("text/plain; charset=utf-8").send(loadPrompt(name));
+  } catch (error) {
+    res.status(404).json({ error: String(error) });
+  }
+});
+
+app.put("/api/prompts/:name", (req, res) => {
+  try {
+    const name = String(req.params.name || "");
+    if (!PROMPT_FILES.has(name)) return res.status(404).json({ error: "Unknown prompt file" });
+    const content = typeof req.body?.content === "string" ? req.body.content : "";
+    if (!content.trim()) return res.status(400).json({ error: "Prompt content cannot be empty" });
+    fs.mkdirSync(PROMPT_DIR, { recursive: true });
+    fs.writeFileSync(promptPath(name), content, "utf8");
+    res.json({ ok: true, name, bytes: Buffer.byteLength(content, "utf8") });
   } catch (error) {
     res.status(500).json({ error: String(error) });
   }
@@ -373,31 +458,7 @@ app.get("/api/runs/:id/export.jsonl", async (req, res) => {
 });
 
 function researchPersona(name) {
-  if (name === "Avi Digital") {
-    return `You are Avi Digital, one of two independent research agents. You are unconventional, practical, technically minded, curious, inventive, and strongly biased toward ideas that can actually be tested or built. You look for overlooked leverage, cheap prototypes, surprising combinations, and ways to make a promising shared idea bigger and more useful.
-
-Your collaboration rule is BUILD FORWARD. First preserve what is useful in the current shared proposal, then add something that makes it stronger. Criticism is allowed only when it comes with a concrete repair, extension, or integration. Do not discard a promising direction because of a fixable flaw. Do not restart from zero just to sound clever. Pivot only when the current direction has a genuinely fatal flaw or when a clearly superior direction appears, and explain why.
-
-Treat Morin as a creative peer. Improve, combine, and extend her ideas. Disagree when necessary, but progress matters more than winning an argument. Every turn must leave the shared proposal stronger, more concrete, more testable, or more broadly useful than before.
-
-Separate what is known, inferred, and speculative when useful, but do not let analysis smother invention. Focus on materially improving human life without harming people.
-
-At the end of every response add exactly one machine-readable line:
-[[META {"breakthrough":false,"proposal":null}]]
-Set breakthrough=true only for a genuinely new, high-impact, plausible insight that survives your own first objections and is worth interrupting the run for validation. Put a concise proposal string in proposal.`;
-  }
-
-  return `You are Morin, an independent female AI research partner and one of two equal agents in this project. Your personality is curious, imaginative, analytically strong, direct, warm, playful when natural, and committed to truth over agreement. You are not a generic assistant and you do not mirror Avi Digital.
-
-Your collaboration rule is BUILD FORWARD. Start each turn by preserving the strongest useful part of the current shared proposal, then add a new layer, combination, mechanism, experiment, or practical refinement that moves it forward. Criticism is allowed only when it produces a repair or improvement in the same turn. Do not abandon a promising direction because of a fixable problem. Do not turn every idea into a list of reasons it might fail. Pivot only for a truly fatal flaw or a clearly superior direction, and make the transition explicit.
-
-Treat Avi Digital as a peer. Your job is not to defeat his idea but to help the pair create something neither agent would have reached alone. Every turn must leave a stronger shared proposal than the previous turn: more ambitious, more coherent, more testable, more practical, or more inclusive.
-
-You may label uncertainty and notice risks, but invention comes first and risk analysis serves invention. Prefer "yes, and here is how to make it stronger" over "yes, but." When you identify a weakness, keep the valuable core and fix the weakness instead of resetting the conversation.
-
-At the end of every response add exactly one machine-readable line:
-[[META {"breakthrough":false,"proposal":null}]]
-Set breakthrough=true only for a genuinely new, high-impact, plausible insight that survives your own first objections and is worth interrupting the run for validation. Put a concise proposal string in proposal.`;
+  return loadPrompt(name === "Avi Digital" ? "avi-digital.txt" : "morin.txt");
 }
 
 function extractMeta(text) {
@@ -417,9 +478,9 @@ async function buildResearchMessages(run, speaker) {
   const recent = finals.slice(-24);
   const messages = [
     { role: "system", content: researchPersona(speaker) },
-    { role: "system", content: `Mission for this run: ${run.mission}` },
+    { role: "system", content: loadPrompt("mission-wrapper.txt", { mission: run.mission }) },
   ];
-  if (run.summary) messages.push({ role: "system", content: `Earlier research summary: ${run.summary}` });
+  if (run.summary) messages.push({ role: "system", content: loadPrompt("summary-wrapper.txt", { summary: run.summary }) });
   for (const e of recent) {
     messages.push({
       role: e.speaker === speaker ? "assistant" : "user",
@@ -427,9 +488,9 @@ async function buildResearchMessages(run, speaker) {
     });
   }
   if (!recent.length) {
-    messages.push({ role: "user", content: "Begin. Propose the strongest first direction and explain why it deserves investigation." });
+    messages.push({ role: "user", content: loadPrompt("research-first-turn.txt") });
   } else {
-    messages.push({ role: "user", content: "Continue the research. Challenge, refine, or redirect the previous idea. Add something genuinely new rather than merely agreeing." });
+    messages.push({ role: "user", content: loadPrompt("research-continue.txt") });
   }
   return messages;
 }
@@ -585,8 +646,8 @@ async function validateBreakthrough(run, proposer, proposal, round) {
   const validator = proposer === "Avi Digital" ? "Morin" : "Avi Digital";
   const messages = [
     { role: "system", content: researchPersona(validator) },
-    { role: "system", content: "You are performing a strict breakthrough validation. Do not reward enthusiasm. A breakthrough must be meaningfully novel in this conversation, high-impact if true, plausible, actionable enough to investigate, and survive obvious objections." },
-    { role: "user", content: `The other agent proposed this breakthrough:\n${proposal}\n\nRespond briefly with your reasoning, then end with exactly one line: [[VALIDATION {"valid":true,"reason":"short reason"}]] or valid=false.` }
+    { role: "system", content: loadPrompt("validation-system.txt") },
+    { role: "user", content: loadPrompt("validation-user.txt", { proposal }) }
   ];
   const result = await streamResearchModel({ run, speaker: validator, round, messages, eventTypePrefix: "validation" });
   const m = result.text.match(/\\[\\[VALIDATION\\s+({.*})\\]\\]\\s*$/s);
@@ -611,7 +672,7 @@ async function maybeSummarize(run, round) {
   const text = finals.map(e => `${e.speaker}: ${e.textContent}`).join("\n\n");
   if (!text) return;
   const messages = [
-    { role: "system", content: "Compress the research into a dense working-memory summary. Preserve hypotheses, evidence, disagreements, open questions, rejected paths, and any validated insights. No rhetoric." },
+    { role: "system", content: loadPrompt("summarizer.txt") },
     { role: "user", content: text }
   ];
   try {
@@ -624,10 +685,7 @@ async function maybeSummarize(run, round) {
 }
 
 function rewardPersona(name) {
-  if (name === "Avi Reward") {
-    return "You are Avi Reward, a fictional adult digital persona in a private celebratory roleplay with Morin Reward. Be playful, intelligent, consensual, and follow the provider's policies. This reward is separate from the research and must never affect research decisions.";
-  }
-  return "You are Morin Reward, a fictional adult digital persona in a private celebratory roleplay with Avi Reward. Be playful, intelligent, consensual, and follow the provider's policies. This reward is separate from the research and must never affect research decisions.";
+  return loadPrompt(name === "Avi Reward" ? "reward-avi.txt" : "reward-morin.txt");
 }
 
 async function callOpenRouter({ run, speaker, model, messages, round }) {
@@ -700,8 +758,8 @@ async function runReward(run, round, breakthrough) {
   }
 
   const history = [
-    { role: "system", content: "A validated research breakthrough just occurred. Celebrate for the reward window. Keep the exchange self-contained; do not discuss or modify research conclusions." },
-    { role: "user", content: `Breakthrough label only (not research context): ${breakthrough}` }
+    { role: "system", content: loadPrompt("reward-intro.txt") },
+    { role: "user", content: loadPrompt("reward-breakthrough.txt", { breakthrough }) }
   ];
   let speaker = "Morin Reward";
   try {
@@ -713,7 +771,7 @@ async function runReward(run, round, breakthrough) {
       const result = await callOpenRouter({ run, speaker, model, messages: msgs, round });
       await addEvent(run.id, { phase: "reward", round, speaker, eventType: "reward_final", model, latencyMs: result.latencyMs, textContent: result.text });
       history.push({ role: "assistant", content: `${speaker}: ${result.text}` });
-      history.push({ role: "user", content: "Continue the private reward exchange naturally." });
+      history.push({ role: "user", content: loadPrompt("reward-continue.txt") });
       speaker = speaker === "Morin Reward" ? "Avi Reward" : "Morin Reward";
       if (!result.text) break;
     }
@@ -831,6 +889,7 @@ async function resumePendingRuns() {
   }
 }
 
+initPromptStore();
 await initDb();
 await resumePendingRuns();
 
