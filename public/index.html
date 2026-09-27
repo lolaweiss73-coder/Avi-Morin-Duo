@@ -221,7 +221,7 @@ $("savePrompt").onclick=savePromptEditor;
 $("promptName").addEventListener("change",loadPromptEditor);
 
 $("refresh").onclick = async () => { await loadConfig(); await loadRun(); await listPrompts(); };
-$("pin").addEventListener("change",()=>{ loadConfig(); loadRun(); if(runId)connect(); });
+$("pin").addEventListener("change",()=>{ loadConfig(); loadRun(); listPrompts().then(loadPromptEditor); if(runId)connect(); });
 
 loadConfig();
 listPrompts().then(loadPromptEditor);
