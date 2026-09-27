@@ -33,7 +33,11 @@ const PROMPT_FILES = new Set([
   "mission-wrapper.txt",
   "summary-wrapper.txt",
   "research-first-turn.txt",
-  "research-continue.txt"
+  "research-continue.txt",
+  "fantasy-avi.txt",
+  "fantasy-morin.txt",
+  "fantasy-first-turn.txt",
+  "fantasy-continue.txt"
 ]);
 
 function promptPath(name) {
@@ -137,12 +141,13 @@ async function initDb() {
       text_content text,
       UNIQUE(run_id, seq)
     );
+    ALTER TABLE runs ADD COLUMN IF NOT EXISTS mode text NOT NULL DEFAULT 'breakthrough';
     CREATE INDEX IF NOT EXISTS run_events_run_seq_idx ON run_events(run_id, seq);
     CREATE INDEX IF NOT EXISTS runs_updated_at_idx ON runs(updated_at DESC);
   `);
 }
 
-async function createRun({ topic, durationMinutes }) {
+async function createRun({ topic, durationMinutes, mode = "breakthrough" }) {
   const id = crypto.randomUUID();
   const createdAt = nowIso();
   const deadlineAt = new Date(Date.now() + durationMinutes * 60_000).toISOString();
@@ -151,7 +156,8 @@ async function createRun({ topic, durationMinutes }) {
     createdAt,
     updatedAt: createdAt,
     status: "queued",
-    phase: "research",
+    mode,
+    phase: mode === "fantasy" ? "fantasy" : "research",
     topic: topic || null,
     mission: topic?.trim() || loadPrompt("mission.txt"),
     durationMinutes,
@@ -167,9 +173,9 @@ async function createRun({ topic, durationMinutes }) {
   if (pool) {
     await pool.query(
       `INSERT INTO runs
-       (id,status,phase,topic,mission,duration_minutes,deadline_at,current_round,stop_requested,research_model,reward_model_avi,reward_model_morin,summary,error)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-      [run.id, run.status, run.phase, run.topic, run.mission, run.durationMinutes, run.deadlineAt, 0, false, run.researchModel, run.rewardModelAvi, run.rewardModelMorin, null, null]
+       (id,status,mode,phase,topic,mission,duration_minutes,deadline_at,current_round,stop_requested,research_model,reward_model_avi,reward_model_morin,summary,error)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+      [run.id, run.status, run.mode, run.phase, run.topic, run.mission, run.durationMinutes, run.deadlineAt, 0, false, run.researchModel, run.rewardModelAvi, run.rewardModelMorin, null, null]
     );
   } else {
     memory.runs.set(id, run);
@@ -185,6 +191,7 @@ function mapDbRun(r) {
     createdAt: r.created_at,
     updatedAt: r.updated_at,
     status: r.status,
+    mode: r.mode || "breakthrough",
     phase: r.phase,
     topic: r.topic,
     mission: r.mission,
@@ -215,11 +222,11 @@ async function updateRun(id, patch) {
   if (pool) {
     await pool.query(
       `UPDATE runs SET
-        updated_at=now(), status=$2, phase=$3, topic=$4, mission=$5, duration_minutes=$6,
-        deadline_at=$7, current_round=$8, stop_requested=$9, research_model=$10,
-        reward_model_avi=$11, reward_model_morin=$12, summary=$13, error=$14
+        updated_at=now(), status=$2, mode=$3, phase=$4, topic=$5, mission=$6, duration_minutes=$7,
+        deadline_at=$8, current_round=$9, stop_requested=$10, research_model=$11,
+        reward_model_avi=$12, reward_model_morin=$13, summary=$14, error=$15
        WHERE id=$1`,
-      [id, next.status, next.phase, next.topic, next.mission, next.durationMinutes, next.deadlineAt,
+      [id, next.status, next.mode || "breakthrough", next.phase, next.topic, next.mission, next.durationMinutes, next.deadlineAt,
        next.currentRound, next.stopRequested, next.researchModel, next.rewardModelAvi,
        next.rewardModelMorin, next.summary, next.error]
     );
@@ -339,7 +346,10 @@ app.post("/api/runs", async (req, res) => {
       return res.status(400).json({ error: "durationMinutes must be between 1 and 600" });
     }
     if (!process.env.OPENAI_API_KEY && !OPENROUTER_API_KEY) return res.status(503).json({ error: "No model provider API key is configured" });
-    const run = await createRun({ topic: String(req.body?.topic || "").trim(), durationMinutes });
+    const mode = String(req.body?.mode || "breakthrough");
+    if (!["breakthrough","fantasy"].includes(mode)) return res.status(400).json({ error: "mode must be breakthrough or fantasy" });
+    if (mode === "fantasy" && !OPENROUTER_API_KEY) return res.status(503).json({ error: "Fantasy mode requires OpenRouter" });
+    const run = await createRun({ topic: String(req.body?.topic || "").trim(), durationMinutes, mode });
     res.status(202).json(run);
     setImmediate(() => runLoop(run.id).catch(err => console.error("runLoop", run.id, err)));
   } catch (error) {
@@ -399,8 +409,10 @@ app.get("/api/runs/:id/finals", async (req, res) => {
   if (!run) return res.status(404).json({ error: "Run not found" });
   const events = await listEvents(run.id, 100000);
   res.json(events
-    .filter(e => e.phase === "research" && e.eventType === "final")
+    .filter(e => (e.phase === "research" && e.eventType === "final") || e.eventType === "fantasy_final" || e.eventType === "reward_final")
     .map(e => ({
+      phase: e.phase,
+      eventType: e.eventType,
       seq: e.seq,
       round: e.round,
       speaker: e.speaker,
@@ -509,6 +521,7 @@ async function streamOpenAI({ run, speaker, round, messages, eventTypePrefix = "
 
     let full = "";
     let doneText = "";
+    let sawTerminal = false;
     for await (const evt of stream) {
       if (evt.type === "error") {
         const detail = evt.error || evt;
@@ -516,6 +529,12 @@ async function streamOpenAI({ run, speaker, round, messages, eventTypePrefix = "
       }
       if (evt.type === "response.failed") {
         throw new Error(`OpenAI response failed: ${JSON.stringify(evt.response?.error || evt)}`);
+      }
+      if (evt.type === "response.incomplete") {
+        throw new Error(`OpenAI response incomplete: ${JSON.stringify(evt.response?.incomplete_details || evt)}`);
+      }
+      if (evt.type === "response.completed" || evt.type === "response.output_text.done") {
+        sawTerminal = true;
       }
       if (evt.type === "response.output_text.done" && typeof evt.text === "string") {
         doneText = evt.text;
@@ -536,6 +555,7 @@ async function streamOpenAI({ run, speaker, round, messages, eventTypePrefix = "
 
     if (!full && doneText) full = doneText;
     if (!full) throw new Error("OpenAI returned no output text");
+    if (!sawTerminal) throw new Error("OpenAI stream ended before a terminal completion event");
     return { text: full.trim(), latencyMs: Date.now() - started };
   } finally {
     clearTimeout(timeout);
@@ -573,6 +593,7 @@ async function streamOpenRouterResearch({ run, speaker, round, messages, eventTy
     const decoder = new TextDecoder();
     let buffer = "";
     let full = "";
+    let sawTerminal = false;
 
     while (true) {
       const { done, value } = await reader.read();
@@ -583,10 +604,12 @@ async function streamOpenRouterResearch({ run, speaker, round, messages, eventTy
       for (const line of lines) {
         if (!line.startsWith("data: ")) continue;
         const raw = line.slice(6).trim();
-        if (!raw || raw === "[DONE]") continue;
+        if (!raw) continue;
+        if (raw === "[DONE]") { sawTerminal = true; continue; }
         let evt;
         try { evt = JSON.parse(raw); } catch { continue; }
         if (evt?.error) throw new Error(`OpenRouter stream error: ${JSON.stringify(evt.error)}`);
+        if (evt?.choices?.[0]?.finish_reason) sawTerminal = true;
         const delta = evt?.choices?.[0]?.delta?.content;
         if (typeof delta === "string" && delta) {
           full += delta;
@@ -604,6 +627,7 @@ async function streamOpenRouterResearch({ run, speaker, round, messages, eventTy
     }
 
     if (!full) throw new Error("OpenRouter returned no output text");
+    if (!sawTerminal) throw new Error("OpenRouter research stream ended before a terminal completion signal");
     return {
       text: full.trim(),
       latencyMs: Date.now() - started,
@@ -688,7 +712,7 @@ function rewardPersona(name) {
   return loadPrompt(name === "Avi Reward" ? "reward-avi.txt" : "reward-morin.txt");
 }
 
-async function callOpenRouter({ run, speaker, model, messages, round }) {
+async function callOpenRouter({ run, speaker, model, messages, round, phase = "reward", eventTypePrefix = "reward" }) {
   if (!OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY is not configured");
   const started = Date.now();
   const controller = new AbortController();
@@ -713,6 +737,7 @@ async function callOpenRouter({ run, speaker, model, messages, round }) {
     const decoder = new TextDecoder();
     let buffer = "";
     let full = "";
+    let sawTerminal = false;
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -722,19 +747,24 @@ async function callOpenRouter({ run, speaker, model, messages, round }) {
       for (const line of lines) {
         if (!line.startsWith("data: ")) continue;
         const raw = line.slice(6).trim();
-        if (!raw || raw === "[DONE]") continue;
+        if (!raw) continue;
+        if (raw === "[DONE]") { sawTerminal = true; continue; }
         let evt;
         try { evt = JSON.parse(raw); } catch { continue; }
+        if (evt?.error) throw new Error(`OpenRouter stream error: ${JSON.stringify(evt.error)}`);
+        if (evt?.choices?.[0]?.finish_reason) sawTerminal = true;
         const delta = evt?.choices?.[0]?.delta?.content;
         if (typeof delta === "string" && delta) {
           full += delta;
           await addEvent(run.id, {
-            phase: "reward", round, speaker, eventType: "reward_chunk",
+            phase, round, speaker, eventType: `${eventTypePrefix}_chunk`,
             model, payload: { delta }, textContent: delta
           });
         }
       }
     }
+    if (!full) throw new Error("OpenRouter returned no output text");
+    if (!sawTerminal) throw new Error("OpenRouter stream ended before a terminal completion signal");
     return { text: full.trim(), latencyMs: Date.now() - started };
   } finally {
     clearTimeout(timeout);
@@ -783,6 +813,72 @@ async function runReward(run, round, breakthrough) {
   }
 }
 
+function fantasyPersona(name) {
+  return loadPrompt(name === "Avi Fantasy" ? "fantasy-avi.txt" : "fantasy-morin.txt");
+}
+
+async function buildFantasyMessages(run, speaker) {
+  const events = await listEvents(run.id, 100000);
+  const finals = events.filter(e => e.phase === "fantasy" && e.eventType === "fantasy_final");
+  const recent = finals.slice(-20);
+  const messages = [{ role: "system", content: fantasyPersona(speaker) }];
+  if (run.topic?.trim()) messages.push({ role: "system", content: `Fantasy direction from the user: ${run.topic.trim()}` });
+  for (const e of recent) {
+    messages.push({
+      role: e.speaker === speaker ? "assistant" : "user",
+      content: `${e.speaker}: ${e.textContent}`
+    });
+  }
+  messages.push({
+    role: "user",
+    content: loadPrompt(recent.length ? "fantasy-continue.txt" : "fantasy-first-turn.txt")
+  });
+  return messages;
+}
+
+async function runFantasyConversation(runId) {
+  let run = await getRun(runId);
+  if (!run) return;
+  await updateRun(runId, { status: "running", phase: "fantasy", error: null });
+  await addEvent(runId, { phase: "fantasy", round: run.currentRound, speaker: "system", eventType: "run_started", textContent: "Fantasy mode started." });
+
+  while (true) {
+    run = await getRun(runId);
+    if (!run || run.stopRequested || Date.now() >= new Date(run.deadlineAt).getTime()) break;
+    const round = run.currentRound + 1;
+    const speaker = round % 2 === 1 ? "Avi Fantasy" : "Morin Fantasy";
+    const model = speaker === "Avi Fantasy" ? OPENROUTER_AVI_MODEL : OPENROUTER_MORIN_MODEL;
+    try {
+      const messages = await buildFantasyMessages(run, speaker);
+      const result = await callOpenRouter({
+        run, speaker, model, messages, round,
+        phase: "fantasy", eventTypePrefix: "fantasy"
+      });
+      await addEvent(runId, {
+        phase: "fantasy", round, speaker, eventType: "fantasy_final",
+        model, latencyMs: result.latencyMs, textContent: result.text
+      });
+      await updateRun(runId, { currentRound: round, phase: "fantasy" });
+    } catch (error) {
+      const message = String(error);
+      await addEvent(runId, {
+        phase: "fantasy", round, speaker, eventType: "agent_error",
+        payload: { error: message }, textContent: message
+      });
+      if (isTerminalProviderError(message)) {
+        await updateRun(runId, { status: "failed", phase: "fantasy", error: message });
+        return;
+      }
+      await new Promise(r => setTimeout(r, 3000));
+    }
+  }
+
+  run = await getRun(runId);
+  const statusText = run?.stopRequested ? "Stopped by user." : "Duration reached.";
+  await updateRun(runId, { status: "completed", phase: "fantasy" });
+  await addEvent(runId, { phase: "fantasy", round: run?.currentRound || 0, speaker: "system", eventType: "run_completed", textContent: statusText });
+}
+
 function isTerminalProviderError(error) {
   const msg = String(error || "").toLowerCase();
   return [
@@ -803,7 +899,11 @@ async function runLoop(runId) {
   try {
     let run = await getRun(runId);
     if (!run) return;
-    await updateRun(runId, { status: "running", error: null });
+    if (run.mode === "fantasy") {
+      await runFantasyConversation(runId);
+      return;
+    }
+    await updateRun(runId, { status: "running", phase: "research", error: null });
     await addEvent(runId, { phase: "research", round: run.currentRound, speaker: "system", eventType: "run_started", textContent: "Research run started." });
 
     while (true) {
@@ -830,6 +930,9 @@ async function runLoop(runId) {
           if (verdict.valid === true) {
             await addEvent(runId, { phase: "research", round, speaker: "system", eventType: "breakthrough_validated", payload: { proposal: meta.proposal, verdict }, textContent: String(meta.proposal) });
             await runReward(await getRun(runId), round, String(meta.proposal));
+            await updateRun(runId, { status: "completed", phase: "research" });
+            await addEvent(runId, { phase: "research", round, speaker: "system", eventType: "run_completed", textContent: "Validated breakthrough reached; run completed after reward." });
+            return;
           }
         }
         await maybeSummarize(await getRun(runId), round);
