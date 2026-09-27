@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Avi Morin Duo</title>
+  <style>
+    :root{font-family:Inter,system-ui,sans-serif;color-scheme:dark;background:#0d1117;color:#e6edf3}
+    *{box-sizing:border-box}body{margin:0;background:linear-gradient(180deg,#0d1117,#111827);min-height:100vh}
+    main{max-width:980px;margin:0 auto;padding:18px}
+    h1{font-size:clamp(28px,6vw,48px);margin:8px 0 4px}.sub{color:#9ca3af;margin:0 0 20px}
+    .card{background:#161b22;border:1px solid #30363d;border-radius:18px;padding:16px;margin:14px 0;box-shadow:0 10px 30px rgba(0,0,0,.22)}
+    label{display:block;font-size:13px;color:#9ca3af;margin:10px 0 6px}
+    input,textarea,button{font:inherit}input,textarea{width:100%;border:1px solid #374151;background:#0b1220;color:#fff;border-radius:12px;padding:12px}
+    textarea{min-height:105px;resize:vertical}.row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+    button,a.btn{border:0;border-radius:12px;padding:11px 16px;font-weight:700;cursor:pointer;text-decoration:none}
+    .primary{background:#60a5fa;color:#07111e}.danger{background:#ef4444;color:#fff}.secondary{background:#283548;color:#e6edf3}
+    button:disabled{opacity:.45;cursor:not-allowed}.status{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+    .pill{border:1px solid #374151;background:#0b1220;border-radius:999px;padding:6px 10px;font-size:12px}
+    #log{height:52vh;overflow:auto;background:#05080d;border:1px solid #273244;border-radius:14px;padding:12px;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.45}
+    .event{padding:8px 0;border-bottom:1px solid #141b25}.who{font-weight:800}.avi{color:#f59e0b}.morin{color:#a78bfa}.system{color:#94a3b8}.reward{color:#fb7185}
+    .meta{color:#64748b;font-size:11px}.error{color:#fca5a5}
+    @media(max-width:640px){.row{grid-template-columns:1fr}main{padding:12px}.card{border-radius:14px}}
+  </style>
+</head>
+<body>
+<main>
+  <h1>Avi Morin Duo</h1>
+  <p class="sub">Two separate agents. Real calls. Long-running research. Full raw logs.</p>
+
+  <section class="card">
+    <div class="row">
+      <div>
+        <label>Run duration (minutes)</label>
+        <input id="duration" type="number" min="1" max="600" value="10" />
+      </div>
+      <div>
+        <label>App PIN</label>
+        <input id="pin" type="password" autocomplete="off" placeholder="Only if configured" />
+      </div>
+    </div>
+    <label>Topic (optional)</label>
+    <textarea id="topic" placeholder="Leave blank to use the default mission: improve human life in every possible way."></textarea>
+    <div class="actions">
+      <button id="start" class="primary">Start</button>
+      <button id="stop" class="danger" disabled>Stop</button>
+      <button id="refresh" class="secondary">Refresh status</button>
+      <a id="export" class="btn secondary" href="#" style="display:none">Export JSONL</a>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="status">
+      <span class="pill" id="runId">No run</span>
+      <span class="pill" id="status">idle</span>
+      <span class="pill" id="phase">research</span>
+      <span class="pill" id="round">round 0</span>
+      <span class="pill" id="config">checking config…</span>
+    </div>
+  </section>
+
+  <section class="card">
+    <div id="log"></div>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+let runId = localStorage.getItem("aviMorinRunId") || "";
+let source = null;
+let seen = new Set();
+
+function pin(){ return $("pin").value.trim(); }
+function headers(extra={}) {
+  const h = {"Content-Type":"application/json", ...extra};
+  if (pin()) h["X-App-Pin"] = pin();
+  return h;
+}
+function esc(s){ return String(s ?? "").replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function speakerClass(s){
+  if (s.includes("Reward")) return "reward";
+  if (s === "Avi Digital") return "avi";
+  if (s === "Morin") return "morin";
+  return "system";
+}
+function renderEvent(e){
+  const key = String(e.seq);
+  if (seen.has(key)) return;
+  seen.add(key);
+  const div = document.createElement("div");
+  div.className = "event";
+  const text = e.textContent || (e.payload?.delta ?? "");
+  div.innerHTML =
+    '<div><span class="who '+speakerClass(e.speaker)+'">'+esc(e.speaker)+'</span> · '+esc(e.eventType)+'</div>'+
+    '<div>'+esc(text)+'</div>'+
+    '<div class="meta">#'+esc(e.seq)+' · '+esc(e.phase)+' · round '+esc(e.round)+' · '+esc(e.createdAt)+'</div>';
+  $("log").appendChild(div);
+  $("log").scrollTop = $("log").scrollHeight;
+}
+async function api(url, opts={}){
+  const res = await fetch(url, {...opts, headers: headers(opts.headers || {})});
+  const text = await res.text();
+  let data; try{data=JSON.parse(text)}catch{data=text}
+  if(!res.ok) throw new Error(data?.error || text || ("HTTP "+res.status));
+  return data;
+}
+async function loadConfig(){
+  try{
+    const c = await api("/api/config");
+    $("config").textContent =
+      (c.hasOpenAI?"OpenAI ✓":"OpenAI ✗")+" · "+
+      (c.hasOpenRouter?"Reward ✓":"Reward ✗")+" · "+
+      (c.hasDatabase?"DB ✓":"Memory only");
+  }catch(e){ $("config").textContent = "config locked"; }
+}
+async function loadRun(){
+  if(!runId) return;
+  try{
+    const r = await api("/api/runs/"+runId);
+    $("runId").textContent = r.id;
+    $("status").textContent = r.status;
+    $("phase").textContent = r.phase;
+    $("round").textContent = "round "+r.currentRound;
+    $("stop").disabled = !["queued","running","stopping"].includes(r.status);
+    $("export").style.display = "inline-block";
+    $("export").href = "/api/runs/"+runId+"/export.jsonl"+(pin()?("?pin="+encodeURIComponent(pin())):"");
+    if(["completed","failed"].includes(r.status) && source){ source.close(); source=null; }
+  }catch(e){ addError(e.message); }
+}
+function connect(){
+  if(!runId) return;
+  if(source) source.close();
+  const url = "/api/runs/"+runId+"/events"+(pin()?("?pin="+encodeURIComponent(pin())):"");
+  source = new EventSource(url);
+  source.onmessage = ev => {
+    try{ const e=JSON.parse(ev.data); renderEvent(e); loadRun(); }catch{}
+  };
+  source.onerror = () => {};
+}
+function addError(msg){
+  const div=document.createElement("div");
+  div.className="event error"; div.textContent=msg; $("log").appendChild(div);
+}
+$("start").onclick = async () => {
+  $("start").disabled=true;
+  try{
+    seen.clear(); $("log").innerHTML="";
+    const data = await api("/api/runs",{
+      method:"POST",
+      body:JSON.stringify({durationMinutes:Number($("duration").value),topic:$("topic").value.trim()})
+    });
+    runId=data.id;
+    localStorage.setItem("aviMorinRunId",runId);
+    await loadRun(); connect();
+  }catch(e){ addError(e.message); }
+  finally{$("start").disabled=false;}
+};
+$("stop").onclick = async () => {
+  if(!runId)return;
+  try{ await api("/api/runs/"+runId+"/stop",{method:"POST",body:"{}"}); await loadRun(); }
+  catch(e){ addError(e.message); }
+};
+$("refresh").onclick = async () => { await loadConfig(); await loadRun(); };
+$("pin").addEventListener("change",()=>{ loadConfig(); loadRun(); if(runId)connect(); });
+
+loadConfig();
+if(runId){loadRun();connect();}
+</script>
+</body>
+</html>
