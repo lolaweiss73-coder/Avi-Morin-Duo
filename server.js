@@ -295,20 +295,6 @@ app.post("/api/runs", async (req, res) => {
   }
 });
 
-app.get("/api/smoke", async (_req, res) => {
-  try {
-    if (!process.env.OPENAI_API_KEY) return res.status(503).json({ error: "OPENAI_API_KEY is not configured" });
-    const run = await createRun({
-      topic: "Smoke test: identify one practical low-cost idea to improve shade and heat resilience in cities. Keep each turn concise. Do not declare a breakthrough unless truly warranted.",
-      durationMinutes: 1
-    });
-    res.status(202).json(run);
-    setImmediate(() => runLoop(run.id).catch(err => console.error("smoke runLoop", run.id, err)));
-  } catch (error) {
-    res.status(500).json({ error: String(error) });
-  }
-});
-
 app.get("/api/runs", async (_req, res) => {
   try {
     if (pool) {
@@ -604,6 +590,20 @@ async function runReward(run, round, breakthrough) {
   }
 }
 
+function isTerminalProviderError(error) {
+  const msg = String(error || "").toLowerCase();
+  return [
+    "no credits remaining",
+    "insufficient_quota",
+    "billing",
+    "invalid api key",
+    "incorrect api key",
+    "authentication",
+    "unauthorized",
+    "forbidden"
+  ].some(part => msg.includes(part));
+}
+
 async function runLoop(runId) {
   if (activeRuns.has(runId)) return;
   activeRuns.add(runId);
@@ -641,7 +641,27 @@ async function runLoop(runId) {
         }
         await maybeSummarize(await getRun(runId), round);
       } catch (error) {
-        await addEvent(runId, { phase: "research", round, speaker, eventType: "agent_error", payload: { error: String(error) }, textContent: String(error) });
+        const message = String(error);
+        await addEvent(runId, {
+          phase: "research",
+          round,
+          speaker,
+          eventType: "agent_error",
+          payload: { error: message },
+          textContent: message
+        });
+        if (isTerminalProviderError(message)) {
+          await updateRun(runId, { status: "failed", error: message });
+          await addEvent(runId, {
+            phase: "research",
+            round,
+            speaker: "system",
+            eventType: "provider_terminal_error",
+            payload: { error: message },
+            textContent: "Research stopped because the model provider cannot accept requests until its account or billing state is fixed."
+          });
+          return;
+        }
         await new Promise(r => setTimeout(r, 3000));
       }
     }
