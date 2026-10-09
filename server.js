@@ -395,10 +395,10 @@ app.put("/api/prompts/:name", (req, res) => {
 app.get("/api/runs", async (_req, res) => {
   try {
     if (pool) {
-      const { rows } = await pool.query("SELECT * FROM runs ORDER BY created_at DESC LIMIT 50");
+      const { rows } = await pool.query("SELECT * FROM runs ORDER BY created_at DESC LIMIT 200");
       return res.json(rows.map(mapDbRun));
     }
-    res.json([...memory.runs.values()].sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0,50));
+    res.json([...memory.runs.values()].sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt))).slice(0,200));
   } catch (error) {
     res.status(500).json({ error: String(error) });
   }
@@ -467,6 +467,48 @@ app.get("/api/runs/:id/export.jsonl", async (req, res) => {
   res.write(JSON.stringify({ type: "run", run }) + "\n");
   for (const event of events) res.write(JSON.stringify({ type: "event", ...event }) + "\n");
   res.end();
+});
+
+app.get("/api/runs/:id/export.txt", async (req, res) => {
+  try {
+    const run = await getRun(req.params.id);
+    if (!run) return res.status(404).json({ error: "Run not found" });
+    const events = await listEvents(run.id, 100000);
+    const dtf = new Intl.DateTimeFormat("he-IL", {
+      timeZone: "Asia/Jerusalem", year: "numeric", month: "2-digit",
+      day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false
+    });
+    const date = x => x ? dtf.format(new Date(x)) : "—";
+    const labels = { breakthrough: "מחקר", fantasy: "משחק תפקידים" };
+    const lines = [
+      "Avi Morin Duo — תמליל השיחה",
+      "מזהה: " + run.id,
+      "מצב: " + (labels[run.mode] || run.mode || "מחקר"),
+      "נושא: " + (run.topic || run.mission || "ללא נושא"),
+      "התחלה: " + date(run.createdAt),
+      "סטטוס: " + run.status,
+      "========================================"
+    ];
+    const included = new Set([
+      "final", "fantasy_final", "reward_final", "breakthrough_proposed",
+      "breakthrough_validated", "breakthrough_validation", "agent_error",
+      "run_completed", "run_failed", "provider_terminal_error"
+    ]);
+    for (const e of events) {
+      if (!included.has(e.eventType) || !e.textContent?.trim()) continue;
+      lines.push(
+        "[" + date(e.createdAt) + "] " + e.speaker + " · סבב " + e.round +
+          " · " + e.eventType,
+        e.textContent.trim(),
+        "----------------------------------------"
+      );
+    }
+    res.type("text/plain; charset=utf-8");
+    res.setHeader("Content-Disposition", 'attachment; filename="avi-morin-' + run.id + '.txt"');
+    res.send("\uFEFF" + lines.join("\n\n"));
+  } catch (error) {
+    res.status(500).json({ error: String(error) });
+  }
 });
 
 function researchPersona(name) {
