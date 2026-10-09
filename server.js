@@ -50,12 +50,36 @@ function seedPromptPath(name) {
   return path.join(PROMPT_SEED_DIR, name);
 }
 
+// Git blob SHA-1 values of the previously shipped default personas.
+// Update only untouched defaults; never overwrite a prompt edited by the user.
+const PREVIOUS_PERSONA_BLOBS = {
+  "fantasy-avi.txt": "3f78e095094e0509403605fa236b59538e8e8867",
+  "reward-avi.txt": "bd4b016f327c9c88b6ea732285c982c1a8ae4c79",
+};
+function gitBlobSha(content) {
+  const bytes = Buffer.from(content, "utf8");
+  return crypto.createHash("sha1")
+    .update("blob " + bytes.length + "\0")
+    .update(bytes)
+    .digest("hex");
+}
 function initPromptStore() {
   fs.mkdirSync(PROMPT_DIR, { recursive: true });
   for (const name of PROMPT_FILES) {
     const dest = promptPath(name);
+    const seed = seedPromptPath(name);
     if (!fs.existsSync(dest)) {
-      fs.copyFileSync(seedPromptPath(name), dest);
+      fs.copyFileSync(seed, dest);
+      continue;
+    }
+    // Existing custom prompt edits always win over new packaged defaults.
+    if (PREVIOUS_PERSONA_BLOBS[name]) {
+      const current = fs.readFileSync(dest, "utf8");
+      const packaged = fs.readFileSync(seed, "utf8");
+      if (gitBlobSha(current) === PREVIOUS_PERSONA_BLOBS[name] && current !== packaged) {
+        fs.copyFileSync(seed, dest);
+        console.log("Upgraded untouched default persona:", name);
+      }
     }
   }
 }
