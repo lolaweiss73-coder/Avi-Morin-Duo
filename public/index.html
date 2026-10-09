@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="he" dir="rtl">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
@@ -18,7 +18,7 @@
     .primary{background:#60a5fa;color:#07111e}.danger{background:#ef4444;color:#fff}.secondary{background:#283548;color:#e6edf3}
     button:disabled{opacity:.45;cursor:not-allowed}.status{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
     .pill{border:1px solid #374151;background:#0b1220;border-radius:999px;padding:6px 10px;font-size:12px}
-    #log{height:52vh;overflow:auto;background:#05080d;border:1px solid #273244;border-radius:14px;padding:12px;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.45}
+    #log{direction:rtl;text-align:right;height:52vh;overflow:auto;background:#05080d;border:1px solid #273244;border-radius:14px;padding:12px;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;line-height:1.45}
     .event{padding:8px 0;border-bottom:1px solid #141b25}.who{font-weight:800}.avi{color:#f59e0b}.morin{color:#a78bfa}.system{color:#94a3b8}.reward{color:#fb7185}
     .meta{color:#64748b;font-size:11px}.error{color:#fca5a5}
     @media(max-width:640px){.row{grid-template-columns:1fr}main{padding:12px}.card{border-radius:14px}}
@@ -27,37 +27,49 @@
 <body>
 <main>
   <h1>Avi Morin Duo</h1>
-  <p class="sub">Two separate agents. Real calls. Long-running research. Full raw logs.</p>
+  <p class="sub">שתי בינות עצמאיות · מחקר או משחק תפקידים · לוגים מלאים</p>
 
   <section class="card">
     <div class="row">
       <div>
-        <label>Run duration (minutes)</label>
+        <label>משך השיחה (בדקות)</label>
         <input id="duration" type="number" min="1" max="600" value="10" />
       </div>
       <div>
-        <label>App PIN</label>
-        <input id="pin" type="password" autocomplete="off" placeholder="Only if configured" />
+        <label>קוד כניסה</label>
+        <input id="pin" type="password" autocomplete="off" placeholder="אם הוגדר" />
       </div>
     </div>
-    <label>Mode</label>
+    <label>מצב שיחה</label>
     <select id="mode">
-      <option value="breakthrough">Breakthrough hunt — research until a validated breakthrough</option>
-      <option value="fantasy">Horny mode — Avi & Morin fantasy</option>
+      <option value="breakthrough">מחקר עד פריצת דרך מאומתת</option>
+      <option value="fantasy">משחק תפקידים — אבי ומורין</option>
     </select>
-    <label id="topicLabel">Topic (optional)</label>
-    <textarea id="topic" placeholder="Leave blank to use the default mission."></textarea>
+    <label id="topicLabel">נושא (לא חובה)</label>
+    <textarea id="topic" placeholder="אפשר להשאיר ריק לשימוש במשימת ברירת המחדל."></textarea>
     <div class="actions">
-      <button id="start" class="primary">Start</button>
-      <button id="stop" class="danger" disabled>Stop</button>
-      <button id="refresh" class="secondary">Refresh status</button>
-      <a id="export" class="btn secondary" href="#" style="display:none">Export JSONL</a>
+      <button id="start" class="primary">התחל</button>
+      <button id="stop" class="danger" disabled>עצור</button>
+      <button id="refresh" class="secondary">רענן מצב</button>
+      <a id="export" class="btn secondary" href="#" style="display:none">ייצוא JSONL</a>
+      <button id="exportText" class="secondary" style="display:none">ייצוא TXT לקריאה</button>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2 style="margin:0 0 8px;font-size:18px">שיחות קודמות</h2>
+    <p class="sub">עד 200 השיחות האחרונות. אפשר לפתוח שיחה ולייצא את התמליל.</p>
+    <select id="history" aria-label="בחירת שיחה שמורה"></select>
+    <div class="actions">
+      <button id="openHistory" class="secondary">פתח שיחה</button>
+      <button id="refreshHistory" class="secondary">רענן רשימה</button>
+      <span id="historyStatus" class="pill">טוענת...</span>
     </div>
   </section>
 
   <section class="card">
     <div class="status">
-      <span class="pill" id="runId">No run</span>
+      <span class="pill" id="runId">טרם נבחרה שיחה</span>
       <span class="pill" id="status">idle</span>
       <span class="pill" id="modeStatus">mode —</span>
       <span class="pill" id="phase">research</span>
@@ -72,7 +84,7 @@
 
   <section class="card">
     <details>
-      <summary style="cursor:pointer;font-weight:800">Runtime prompts</summary>
+      <summary style="cursor:pointer;font-weight:800">עריכת פרומפטים</summary>
       <p class="sub" style="margin-top:10px">Edit live prompt text stored on the persistent volume. Saving here does not require a build or deploy.</p>
       <label>Prompt file</label>
       <select id="promptName" style="width:100%;border:1px solid #374151;background:#0b1220;color:#fff;border-radius:12px;padding:12px"></select>
@@ -147,6 +159,7 @@ async function loadRun(){
     $("round").textContent = "round "+r.currentRound;
     $("stop").disabled = !["queued","running","stopping"].includes(r.status);
     $("export").style.display = "inline-block";
+    $("exportText").style.display = "inline-block";
     $("export").href = "/api/runs/"+runId+"/export.jsonl"+(pin()?("?pin="+encodeURIComponent(pin())):"");
     if(["completed","failed"].includes(r.status) && source){ source.close(); source=null; }
   }catch(e){ addError(e.message); }
@@ -175,7 +188,7 @@ $("start").onclick = async () => {
     });
     runId=data.id;
     localStorage.setItem("aviMorinRunId",runId);
-    await loadRun(); connect();
+    await loadRun(); connect(); await loadHistory();
   }catch(e){ addError(e.message); }
   finally{$("start").disabled=false;}
 };
@@ -230,18 +243,59 @@ $("promptName").addEventListener("change",loadPromptEditor);
 
 function updateModeHelp(){
   const fantasy=$("mode").value==="fantasy";
-  $("topicLabel").textContent=fantasy?"Fantasy direction (optional)":"Research topic (optional)";
+  $("topicLabel").textContent=fantasy?"כיוון למשחק (לא חובה)":"נושא מחקר (לא חובה)";
   $("topic").placeholder=fantasy
-    ?"Optional direction for Avi and Morin's fantasy conversation."
-    :"Leave blank to use the default mission.";
+    ?"כיוון אפשרי לשיחה בין אבי ומורין."
+    :"אפשר להשאיר ריק לשימוש במשימת ברירת המחדל.";
 }
 $("mode").addEventListener("change",updateModeHelp);
 updateModeHelp();
 
-$("refresh").onclick = async () => { await loadConfig(); await loadRun(); await listPrompts(); };
-$("pin").addEventListener("change",()=>{ loadConfig(); loadRun(); listPrompts().then(loadPromptEditor); if(runId)connect(); });
+async function loadHistory(){
+  try {
+    const runs = await api("/api/runs");
+    const sel = $("history");
+    const previous = sel.value || runId;
+    sel.replaceChildren();
+    for(const r of runs) {
+      const opt = document.createElement("option");
+      const date = new Date(r.createdAt).toLocaleString("he-IL",{dateStyle:"short",timeStyle:"short"});
+      const topic = (r.topic || r.mission || "ללא נושא").replace(/\s+/g," ").slice(0,65);
+      opt.value = r.id;
+      opt.textContent = date+" · "+topic+" · "+r.status;
+      sel.appendChild(opt);
+    }
+    if([...sel.options].some(o=>o.value===previous)) sel.value=previous;
+    $("historyStatus").textContent = runs.length+" שיחות";
+  }catch(e){ $("historyStatus").textContent = e.message; }
+}
+$("openHistory").onclick = async () => {
+  const id = $("history").value;
+  if(!id) return;
+  runId=id;
+  localStorage.setItem("aviMorinRunId",runId);
+  if(source) { source.close(); source=null; }
+  seen.clear(); $("log").replaceChildren();
+  await loadRun(); connect();
+};
+$("refreshHistory").onclick = loadHistory;
+$("exportText").onclick = async () => {
+  if(!runId) return;
+  try {
+    const res = await fetch("/api/runs/"+runId+"/export.txt", {headers:headers()});
+    if(!res.ok) throw new Error("HTTP "+res.status+": "+await res.text());
+    const objectUrl = URL.createObjectURL(await res.blob());
+    const a=document.createElement("a");
+    a.href=objectUrl; a.download="avi-morin-"+runId+".txt";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(objectUrl),1500);
+  }catch(e){ addError(e.message); }
+};
+$("refresh").onclick = async () => { await loadConfig(); await loadRun(); await listPrompts(); await loadHistory(); };
+$("pin").addEventListener("change",()=>{ loadConfig(); loadRun(); loadHistory(); listPrompts().then(loadPromptEditor); if(runId)connect(); });
 
 loadConfig();
+loadHistory();
 listPrompts().then(loadPromptEditor);
 if(runId){loadRun();connect();}
 </script>
